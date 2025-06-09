@@ -1,0 +1,282 @@
+"""
+Gradio Web Interface for Recipe RAG Assistant
+"""
+import sys
+from pathlib import Path
+
+# Add project root to Python path for proper package imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+import gradio as gr
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
+import warnings
+warnings.filterwarnings('ignore')
+
+from src.rag import RecipeRAGAssistant, RecipeSearchEngine
+
+class RecipeGradioApp:
+    """Gradio web interface for the Recipe RAG Assistant"""
+    
+    def __init__(self):
+        """Initialize the Gradio app"""
+        print("Initializing Recipe RAG Assistant...")
+        
+        # Initialize components
+        self.assistant = RecipeRAGAssistant()
+        self.search_engine = self.assistant.search_engine
+        
+        # Pre-compute embeddings for visualization
+        self._prepare_visualizations()
+        
+        print("✅ App ready!")
+    
+    def _prepare_visualizations(self):
+        """Pre-compute visualization coordinates"""
+        print("Preparing visualizations...")
+        
+        # Get embedding coordinates
+        self.pca_coords = self.search_engine.get_embedding_coordinates("PCA")
+        self.tsne_coords = self.search_engine.get_embedding_coordinates("TSNE")
+        
+        # Get recipe dataframe
+        self.recipe_df = self.search_engine.get_recipe_dataframe()
+        
+    def chat_with_recipes(self, message: str, history: list) -> tuple:
+        """Handle chat interface"""
+        if not message.strip():
+            return history, ""
+        
+        try:
+            # Get response from RAG assistant
+            response = self.assistant.ask(message)
+            
+            # Update chat history
+            history = history or []
+            history.append([message, response])
+            
+            return history, ""
+            
+        except Exception as e:
+            error_msg = f"Sorry, I encountered an error: {str(e)}"
+            history = history or []
+            history.append([message, error_msg])
+            return history, ""
+    
+    def visualize_embeddings(self, method: str, color_by: str, search_query: str = ""):
+        """Create embedding visualization"""
+        
+        # Choose coordinates
+        coords = self.pca_coords if method == "PCA" else self.tsne_coords
+        
+        # Create visualization dataframe
+        viz_df = self.recipe_df.copy()
+        viz_df['x'] = coords[:, 0]
+        viz_df['y'] = coords[:, 1]
+        
+        # Handle search highlighting
+        if search_query.strip():
+            try:
+                # Get similar recipes
+                similar_recipes = self.search_engine.search(search_query, k=10)
+                recipe_ids = {recipe['id']: i for i, recipe in enumerate(self.search_engine.recipes)}
+                highlighted_indices = [
+                    recipe_ids[recipe[0]['id']] 
+                    for recipe, score in similar_recipes 
+                    if recipe[0]['id'] in recipe_ids
+                ]
+                viz_df['highlighted'] = viz_df.index.isin(highlighted_indices)
+            except:
+                viz_df['highlighted'] = False
+        else:
+            viz_df['highlighted'] = False
+        
+        # Create hover text
+        viz_df['hover_text'] = (
+            "<b>" + viz_df['title'] + "</b><br>" +
+            "Cuisine: " + viz_df['cuisine'] + "<br>" +
+            "Ready in: " + viz_df['ready_time'].astype(str) + " min<br>" +
+            "Serves: " + viz_df['servings'].astype(str) + "<br>" +
+            "Type: " + viz_df['dish_type'] + "<br>" +
+            "Ingredients: " + viz_df['ingredients_preview']
+        )
+        
+        # Create the plot
+        if search_query.strip() and any(viz_df['highlighted']):
+            # Highlight search results
+            fig = go.Figure()
+            
+            # Regular points
+            regular_df = viz_df[~viz_df['highlighted']]
+            fig.add_trace(go.Scatter(
+                x=regular_df['x'], y=regular_df['y'],
+                mode='markers',
+                marker=dict(size=8, color='lightgray', opacity=0.6),
+                text=regular_df['hover_text'],
+                hovertemplate='%{text}<extra></extra>',
+                name='Other recipes'
+            ))
+            
+            # Highlighted points
+            highlight_df = viz_df[viz_df['highlighted']]
+            fig.add_trace(go.Scatter(
+                x=highlight_df['x'], y=highlight_df['y'],
+                mode='markers',
+                marker=dict(size=12, color='red', opacity=0.9),
+                text=highlight_df['hover_text'],
+                hovertemplate='%{text}<extra></extra>',
+                name=f'Similar to "{search_query}"'
+            ))
+            
+            title = f"{method} Visualization - Search: '{search_query}'"
+            
+        else:
+            # Regular colored plot
+            color_map = {
+                "Cuisine": 'cuisine',
+                "Ready Time": 'ready_time', 
+                "Dish Type": 'dish_type'
+            }
+            color_col = color_map.get(color_by, 'cuisine')
+            
+            if color_by == "Ready Time":
+                fig = px.scatter(
+                    viz_df, x='x', y='y', color=color_col,
+                    color_continuous_scale='viridis',
+                    hover_data={'hover_text': True, 'x': False, 'y': False},
+                    title=f"{method} Visualization - Colored by {color_by}"
+                )
+            else:
+                fig = px.scatter(
+                    viz_df, x='x', y='y', color=color_col,
+                    hover_data={'hover_text': True, 'x': False, 'y': False},
+                    title=f"{method} Visualization - Colored by {color_by}"
+                )
+            
+            fig.update_traces(hovertemplate='%{customdata[0]}<extra></extra>')
+        
+        # Update layout
+        fig.update_layout(
+            width=800, height=600,
+            xaxis_title=f"{method} Component 1",
+            yaxis_title=f"{method} Component 2"
+        )
+        
+        return fig
+    
+    def get_stats_markdown(self) -> str:
+        """Generate statistics markdown"""
+        stats = self.assistant.get_recipe_stats()
+        
+        return f"""
+        ## Recipe Collection Statistics
+        
+        **Total Recipes:** {stats.get('total_recipes', 0)}
+        
+        **Cuisines:** {stats.get('unique_cuisines', 0)} unique cuisines
+        
+        **Cooking Times:**
+        - Average: {stats.get('avg_ready_time', 0):.1f} minutes
+        - Range: {stats.get('time_range', (0, 0))[0]} - {stats.get('time_range', (0, 0))[1]} minutes
+        
+        **Dish Types:** {stats.get('unique_dish_types', 0)} unique types
+        
+        **Top Cuisines:**
+        {chr(10).join([f"- {cuisine}: {count}" for cuisine, count in list(stats.get('top_cuisines', {}).items())[:3]])}
+        """
+
+def create_gradio_interface():
+    """Create and configure the Gradio interface"""
+    
+    app = RecipeGradioApp()
+    
+    with gr.Blocks(title="Recipe RAG Assistant", theme=gr.themes.Soft()) as demo:
+        
+        gr.Markdown("# 🍳 Recipe RAG Assistant")
+        gr.Markdown("Chat with your recipe database and explore how recipes are organized in embedding space!")
+        
+        with gr.Tab("💬 Chat with Recipes"):
+            with gr.Row():
+                with gr.Column(scale=2):
+                    chatbot = gr.Chatbot(
+                        height=500,
+                        placeholder="Ask me about recipes! Try: 'What's good for dinner?' or 'I need something quick'"
+                    )
+                    
+                    with gr.Row():
+                        msg = gr.Textbox(
+                            placeholder="Type your recipe question here...",
+                            container=False, scale=4
+                        )
+                        submit_btn = gr.Button("Send", scale=1, variant="primary")
+                
+                with gr.Column(scale=1):
+                    stats_display = gr.Markdown(app.get_stats_markdown())
+        
+        with gr.Tab("🗺️ Recipe Embedding Visualization"):
+            gr.Markdown("### Explore Recipe Relationships")
+            gr.Markdown("Each point represents a recipe. Similar recipes cluster together!")
+            
+            with gr.Row():
+                with gr.Column():
+                    method = gr.Radio(
+                        choices=["PCA", "TSNE"],
+                        value="PCA",
+                        label="Visualization Method"
+                    )
+                    
+                    color_by = gr.Radio(
+                        choices=["Cuisine", "Ready Time", "Dish Type"],
+                        value="Cuisine",
+                        label="Color By"
+                    )
+                    
+                    search_query = gr.Textbox(
+                        placeholder="Search to highlight similar recipes",
+                        label="Search & Highlight"
+                    )
+                    
+                    viz_btn = gr.Button("Update Visualization", variant="primary")
+            
+            plot = gr.Plot(label="Recipe Embedding Space")
+        
+        with gr.Tab("📊 Recipe Explorer"):
+            gr.Markdown("### Browse Your Recipe Collection")
+            recipe_table = gr.Dataframe(
+                value=app.recipe_df[['title', 'cuisine', 'ready_time', 'dish_type', 'diets']].head(15),
+                headers=['Recipe', 'Cuisine', 'Ready Time (min)', 'Dish Type', 'Diets'],
+                interactive=False
+            )
+        
+        # Event handlers
+        submit_btn.click(
+            app.chat_with_recipes,
+            inputs=[msg, chatbot],
+            outputs=[chatbot, msg]
+        )
+        
+        msg.submit(
+            app.chat_with_recipes,
+            inputs=[msg, chatbot],
+            outputs=[chatbot, msg]
+        )
+        
+        viz_btn.click(
+            app.visualize_embeddings,
+            inputs=[method, color_by, search_query],
+            outputs=[plot]
+        )
+        
+        # Load initial visualization
+        demo.load(
+            lambda: app.visualize_embeddings("PCA", "Cuisine", ""),
+            outputs=[plot]
+        )
+    
+    return demo
+
+if __name__ == "__main__":
+    demo = create_gradio_interface()
+    demo.launch(share=True, server_port=7860)
