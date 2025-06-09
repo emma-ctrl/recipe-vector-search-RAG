@@ -28,6 +28,9 @@ class RecipeGradioApp:
         self.assistant = RecipeRAGAssistant()
         self.search_engine = self.assistant.search_engine
         
+        # Session storage for recipe memory
+        self.session_recipes = {}
+        
         # Pre-compute embeddings for visualization
         self._prepare_visualizations()
         
@@ -44,14 +47,74 @@ class RecipeGradioApp:
         # Get recipe dataframe
         self.recipe_df = self.search_engine.get_recipe_dataframe()
         
+    def _get_session_id(self, history):
+        """Generate a simple session ID"""
+        return "main_session"
+    
+    def _store_recipes_in_session(self, session_id: str, recipes: list):
+        """Store the current search results in session memory"""
+        self.session_recipes[session_id] = {
+            i + 1: recipe for i, (recipe, score) in enumerate(recipes)
+        }
+    
+    def _get_recipe_from_session(self, session_id: str, recipe_number: int):
+        """Get a specific recipe from session memory"""
+        session_data = self.session_recipes.get(session_id, {})
+        return session_data.get(recipe_number)
+    
+    def _is_recipe_reference(self, message: str):
+        """Check if message is asking about a specific recipe number"""
+        import re
+        
+        patterns = [
+            r'recipe\s+(\d+)',
+            r'recipe\s+number\s+(\d+)', 
+            r'try\s+recipe\s+(\d+)',
+            r'^(\d+)$',
+            r'option\s+(\d+)',
+            r'choice\s+(\d+)'
+        ]
+        
+        message_lower = message.lower().strip()
+        
+        for pattern in patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                try:
+                    return int(match.group(1))
+                except (ValueError, IndexError):
+                    continue
+        
+        return None
+    
     def chat_with_recipes(self, message: str, history: list) -> tuple:
-        """Handle chat interface"""
+        """Handle chat interface with recipe memory"""
         if not message.strip():
             return history, ""
         
         try:
-            # Get response from RAG assistant
-            response = self.assistant.ask(message)
+            session_id = self._get_session_id(history)
+            
+            # Check if user is asking about a specific recipe
+            recipe_number = self._is_recipe_reference(message)
+            
+            if recipe_number:
+                # User is asking about a specific recipe
+                stored_recipe = self._get_recipe_from_session(session_id, recipe_number)
+                
+                if stored_recipe:
+                    response = self._generate_recipe_details_with_buttons(stored_recipe, message)
+                else:
+                    response = f"I don't have a Recipe {recipe_number} from our recent search. Try asking a new question!"
+            
+            else:
+                # Regular search query
+                relevant_recipes = self.assistant.search_recipes(message, k=3)
+                self._store_recipes_in_session(session_id, relevant_recipes)
+                
+                # Generate response with recipe buttons
+                base_response = self.assistant.ask(message)
+                response = self._add_recipe_buttons_to_response(base_response, relevant_recipes)
             
             # Update chat history
             history = history or []
@@ -64,6 +127,97 @@ class RecipeGradioApp:
             history = history or []
             history.append([message, error_msg])
             return history, ""
+    
+    def _add_recipe_buttons_to_response(self, response: str, recipes: list) -> str:
+        """Add interactive buttons to chat response for each recipe"""
+        if not recipes:
+            return response
+        
+        # Add recipe action buttons
+        buttons_html = "\n\n---\n\n"
+        
+        for i, (recipe, score) in enumerate(recipes, 1):
+            source_url = recipe.get('sourceUrl', '')
+            recipe_title = recipe.get('title', f'Recipe {i}')
+            
+            if source_url:
+                # Create clickable buttons for each recipe
+                buttons_html += f"""**Recipe {i}: {recipe_title}**
+🔗 [View Full Recipe]({source_url}) | ⏱️ {recipe.get('readyInMinutes', '?')} min | 🍽️ Serves {recipe.get('servings', '?')}
+
+"""
+            else:
+                buttons_html += f"""**Recipe {i}: {recipe_title}**
+⏱️ {recipe.get('readyInMinutes', '?')} min | 🍽️ Serves {recipe.get('servings', '?')} | ℹ️ *No source link available*
+
+"""
+        
+        return response + buttons_html
+    
+    def _generate_recipe_details_with_buttons(self, recipe: dict, user_message: str) -> str:
+        """Generate detailed recipe info with action buttons"""
+        
+        base_response = self._generate_recipe_details(recipe, user_message)
+        
+        # Add action buttons for this specific recipe
+        source_url = recipe.get('sourceUrl', '')
+        
+        buttons_html = "\n\n---\n\n"
+        if source_url:
+            buttons_html += f"""**🔗 [Get Complete Recipe & Instructions]({source_url})**
+
+**Quick Info:**
+⏱️ Ready in: {recipe.get('readyInMinutes', 'Unknown')} minutes
+🍽️ Serves: {recipe.get('servings', 'Unknown')} people
+🌟 Health Score: {recipe.get('healthScore', 'N/A')}/100
+"""
+        else:
+            buttons_html += "\n*Full recipe link not available for this recipe.*"
+        
+        return base_response + buttons_html
+    
+    def _generate_recipe_details(self, recipe: dict, user_message: str) -> str:
+        """Generate detailed information about a specific recipe"""
+        
+        context = f"""
+        Recipe Details: {recipe['title']}
+        
+        Cuisine: {', '.join(recipe.get('cuisines', ['General']))}
+        Ready in: {recipe.get('readyInMinutes', 'Unknown')} minutes
+        Serves: {recipe.get('servings', 'Unknown')} people
+        
+        Ingredients: {recipe.get('ingredients', 'Not available')[:500]}...
+        
+        Instructions: {recipe.get('instructions', 'Not available')[:500]}...
+        
+        Source: {recipe.get('sourceUrl', 'Not available')}
+        """
+        
+        return self.assistant.generate_response(
+            f"The user is asking about this specific recipe: {user_message}",
+            context
+        )
+    
+    def get_enhanced_recipe_dataframe(self):
+        """Get recipe dataframe with clickable links for the explorer"""
+        df = self.recipe_df.copy()
+        
+        # Add source URLs from original recipe data
+        source_urls = []
+        for recipe in self.search_engine.recipes:
+            url = recipe.get('sourceUrl', '')
+            if url and url.strip():
+                source_urls.append(f'<a href="{url}" target="_blank">🔗 View Recipe</a>')
+            else:
+                source_urls.append("No link available")
+        
+        df['recipe_link'] = source_urls
+        
+        # Select and reorder columns for display
+        display_df = df[['title', 'cuisine', 'ready_time', 'dish_type', 'diets', 'recipe_link']].head(15)
+        display_df.columns = ['Recipe Name', 'Cuisine', 'Ready Time (min)', 'Dish Type', 'Diets', 'Full Recipe']
+        
+        return display_df
     
     def visualize_embeddings(self, method: str, color_by: str, search_query: str = ""):
         """Create embedding visualization"""
@@ -79,7 +233,6 @@ class RecipeGradioApp:
         # Handle search highlighting
         if search_query.strip():
             try:
-                # Get similar recipes
                 similar_recipes = self.search_engine.search(search_query, k=10)
                 recipe_ids = {recipe['id']: i for i, recipe in enumerate(self.search_engine.recipes)}
                 highlighted_indices = [
@@ -246,10 +399,12 @@ def create_gradio_interface():
         
         with gr.Tab("📊 Recipe Explorer"):
             gr.Markdown("### Browse Your Recipe Collection")
+            gr.Markdown("*Click the recipe links to view complete recipes with full instructions!*")
+            
             recipe_table = gr.Dataframe(
-                value=app.recipe_df[['title', 'cuisine', 'ready_time', 'dish_type', 'diets']].head(15),
-                headers=['Recipe', 'Cuisine', 'Ready Time (min)', 'Dish Type', 'Diets'],
-                interactive=False
+                value=app.get_enhanced_recipe_dataframe(),
+                interactive=False,
+                wrap=True
             )
         
         # Event handlers

@@ -80,22 +80,25 @@ class RecipeRAGAssistant:
     def generate_response(self, user_query: str, recipe_context: str) -> str:
         """Generate LLM response using the configured provider"""
         
-        system_prompt = """You are a helpful recipe assistant. Based on the user's question and the provided recipes, give personalized recommendations and cooking advice.
+        system_prompt = """You are a helpful recipe assistant with memory of the conversation. Based on the user's question, the provided recipes, and any conversation context, give personalized recommendations and cooking advice.
 
 Guidelines:
-- Be conversational and helpful
-- Reference specific recipes when relevant
-- Consider user preferences, time constraints, and skill level
-- Suggest modifications or alternatives when appropriate
+- Be conversational and remember what the user has told you
+- When referencing recipes, use their exact numbers (Recipe 1, Recipe 2, etc.) as provided
+- Pay attention to user preferences mentioned in the conversation (dietary restrictions, time constraints, etc.)
+- Reference previous parts of the conversation when relevant
+- Suggest modifications based on user preferences
 - Include practical cooking tips when helpful
-- If no good matches, acknowledge this and suggest alternatives"""
+- Always maintain recipe numbering consistency
+- Be friendly and personal - this is an ongoing conversation"""
 
-        user_prompt = f"""User Question: {user_query}
+        user_prompt = f"""Based on our conversation and the user's preferences:
 
-Available Recipes:
 {recipe_context}
 
-Please provide a helpful, personalized response based on the user's question and the recipes above."""
+User's current question: {user_query}
+
+Please provide a helpful, personalized response that takes into account the full conversation context and references recipes by their numbers when relevant."""
 
         if self.api_provider == "nebius":
             return self._generate_nebius_response(system_prompt, user_prompt)
