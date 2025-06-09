@@ -45,11 +45,11 @@ class RecipeSearchEngine:
             {
                 'id': recipe.get('id'),
                 'title': recipe['title'],
-                'cuisine': ', '.join(recipe.get('cuisines', ['Unknown'])),
+                'cuisine': ', '.join(recipe.get('cuisines', [])) if recipe.get('cuisines') else 'Mixed/Other',
                 'ready_time': recipe.get('readyInMinutes', 0),
                 'servings': recipe.get('servings', 0),
-                'dish_type': ', '.join(recipe.get('dishTypes', ['Unknown'])),
-                'diets': ', '.join(recipe.get('diets', ['None'])),
+                'dish_type': ', '.join(recipe.get('dishTypes', [])) if recipe.get('dishTypes') else 'General',
+                'diets': ', '.join(recipe.get('diets', [])) if recipe.get('diets') else 'No specific diet',
                 'health_score': recipe.get('healthScore', 0),
                 'ingredients_preview': recipe.get('ingredients', '')[:100] + '...' if recipe.get('ingredients') else '',
                 'source_url': recipe.get('sourceUrl', '')

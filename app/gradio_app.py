@@ -167,24 +167,26 @@ class RecipeGradioApp:
         return fig
     
     def get_stats_markdown(self) -> str:
-        """Generate statistics markdown"""
-        stats = self.assistant.get_recipe_stats()
+        """Generate helpful suggestions for users"""
+        return """
+        ## 💡 Try Asking Me:
         
-        return f"""
-        ## Recipe Collection Statistics
+        **🍽️ Meal Ideas:**
+        - "What's good for dinner tonight?"
+        - "I need something quick and healthy"
+        - "Suggest a comfort food recipe"
         
-        **Total Recipes:** {stats.get('total_recipes', 0)}
+        **🎯 Specific Requests:**
+        - "Show me chocolate desserts"
+        - "What can I make in 30 minutes?"
+        - "I want something vegetarian"
         
-        **Cuisines:** {stats.get('unique_cuisines', 0)} unique cuisines
+        **🔍 Ingredient-Based:**
+        - "Recipes with chicken and pasta"
+        - "Something with oats for breakfast"
+        - "Easy weeknight meals"
         
-        **Cooking Times:**
-        - Average: {stats.get('avg_ready_time', 0):.1f} minutes
-        - Range: {stats.get('time_range', (0, 0))[0]} - {stats.get('time_range', (0, 0))[1]} minutes
-        
-        **Dish Types:** {stats.get('unique_dish_types', 0)} unique types
-        
-        **Top Cuisines:**
-        {chr(10).join([f"- {cuisine}: {count}" for cuisine, count in list(stats.get('top_cuisines', {}).items())[:3]])}
+        **Just start typing your question below! 👇**
         """
 
 def create_gradio_interface():
